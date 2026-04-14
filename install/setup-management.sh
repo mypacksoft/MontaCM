@@ -127,6 +127,7 @@ if ! $OFFLINE; then
         python3-dev \
         ansible \
         genisoimage \
+        xorriso \
         curl \
         wget \
         jq \
@@ -221,9 +222,17 @@ fi
 
 ok "PostgreSQL roles and database created"
 
-step "Running schema migration"
+step "Running schema migrations"
 sudo -u postgres psql -d "$DB_NAME" -f "$SCRIPT_DIR/migrations/001_schema.sql" > /dev/null
-ok "Schema migration applied"
+ok "001_schema.sql applied"
+
+for mig_file in "$SCRIPT_DIR"/migrations/[0-9][0-9][0-9]_*.sql; do
+    [[ "$mig_file" == */001_schema.sql ]] && continue
+    [[ -f "$mig_file" ]] || continue
+    mig_name=$(basename "$mig_file")
+    sudo -u postgres psql -d "$DB_NAME" -f "$mig_file" > /dev/null
+    ok "$mig_name applied"
+done
 
 step "Updating PostgREST authenticator password in schema"
 sudo -u postgres psql -d "$DB_NAME" -c \

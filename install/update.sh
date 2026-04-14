@@ -116,26 +116,30 @@ echo ""
 DAEMON_CHANGED=false
 ANSIBLE_CHANGED=false
 WEB_CHANGED=false
+MIGRATION_CHANGED=false
 
 if $CHANGED; then
     DIFF_FILES=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || echo "")
 
-    echo "$DIFF_FILES" | grep -qE '^install/daemon/' && DAEMON_CHANGED=true || true
-    echo "$DIFF_FILES" | grep -qE '^ansible/'        && ANSIBLE_CHANGED=true || true
+    echo "$DIFF_FILES" | grep -qE '^install/daemon/'      && DAEMON_CHANGED=true || true
+    echo "$DIFF_FILES" | grep -qE '^ansible/'             && ANSIBLE_CHANGED=true || true
+    echo "$DIFF_FILES" | grep -qE '^install/migrations/'  && MIGRATION_CHANGED=true || true
     echo "$DIFF_FILES" | grep -qE '^src/|^public/|^index\.html|^package\.json|^vite\.config' \
         && WEB_CHANGED=true || true
 
     echo "  Changes detected:"
-    $WEB_CHANGED    && echo "    - Frontend (src/)" || true
-    $DAEMON_CHANGED && echo "    - Daemon (install/daemon/)" || true
-    $ANSIBLE_CHANGED && echo "    - Ansible playbooks (ansible/)" || true
-    ! $WEB_CHANGED && ! $DAEMON_CHANGED && ! $ANSIBLE_CHANGED \
+    $WEB_CHANGED        && echo "    - Frontend (src/)" || true
+    $DAEMON_CHANGED     && echo "    - Daemon (install/daemon/)" || true
+    $ANSIBLE_CHANGED    && echo "    - Ansible playbooks (ansible/)" || true
+    $MIGRATION_CHANGED  && echo "    - DB migrations (install/migrations/)" || true
+    ! $WEB_CHANGED && ! $DAEMON_CHANGED && ! $ANSIBLE_CHANGED && ! $MIGRATION_CHANGED \
         && echo "    - Other files (no rebuild needed)" || true
 else
     warn "No new commits — forcing full redeploy anyway"
     WEB_CHANGED=true
     DAEMON_CHANGED=true
     ANSIBLE_CHANGED=true
+    MIGRATION_CHANGED=true
 fi
 
 # ---------------------------------------------------------------------------
@@ -214,7 +218,35 @@ if $DAEMON_CHANGED; then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Update Ansible playbooks
+# 7. Apply new DB migrations
+# ---------------------------------------------------------------------------
+
+if $MIGRATION_CHANGED; then
+    step "Applying new DB migrations"
+
+    DB_NAME="yb_manager"
+    MIGRATIONS_DIR="$SCRIPT_DIR/migrations"
+    APPLIED_TABLE_SQL="CREATE TABLE IF NOT EXISTS _migrations (name text PRIMARY KEY, applied_at timestamptz DEFAULT now());"
+    sudo -u postgres psql -d "$DB_NAME" -c "$APPLIED_TABLE_SQL" > /dev/null
+
+    for mig_file in "$MIGRATIONS_DIR"/[0-9][0-9][0-9]_*.sql; do
+        [[ -f "$mig_file" ]] || continue
+        mig_name=$(basename "$mig_file")
+        already=$(sudo -u postgres psql -d "$DB_NAME" -tAc \
+            "SELECT COUNT(*) FROM _migrations WHERE name='$mig_name';" 2>/dev/null || echo "0")
+        if [[ "$already" == "0" ]]; then
+            sudo -u postgres psql -d "$DB_NAME" -f "$mig_file" > /dev/null
+            sudo -u postgres psql -d "$DB_NAME" -c \
+                "INSERT INTO _migrations (name) VALUES ('$mig_name') ON CONFLICT DO NOTHING;" > /dev/null
+            ok "$mig_name applied"
+        else
+            ok "$mig_name already applied, skipping"
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Update Ansible playbooks
 # ---------------------------------------------------------------------------
 
 if $ANSIBLE_CHANGED; then
