@@ -201,8 +201,11 @@ step "Configuring PostgreSQL"
 
 systemctl enable --now postgresql > /dev/null
 
-sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 || \
+if sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
+    sudo -u postgres psql -c "ALTER ROLE $DB_USER WITH PASSWORD '$DB_PASS';"
+else
     sudo -u postgres psql -c "CREATE ROLE $DB_USER WITH LOGIN PASSWORD '$DB_PASS';"
+fi
 
 sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
@@ -210,8 +213,11 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" |
 sudo -u postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
 sudo -u postgres psql -d "$DB_NAME" -c "GRANT ALL ON SCHEMA public TO $DB_USER;"
 
-sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='authenticator'" | grep -q 1 || \
+if sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='authenticator'" | grep -q 1; then
+    sudo -u postgres psql -c "ALTER ROLE authenticator WITH PASSWORD '$POSTGREST_DB_PASS';"
+else
     sudo -u postgres psql -c "CREATE ROLE authenticator NOINHERIT LOGIN PASSWORD '$POSTGREST_DB_PASS';"
+fi
 
 ok "PostgreSQL roles and database created"
 
