@@ -295,6 +295,11 @@ GRANT USAGE ON SCHEMA public TO anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon;
 
+GRANT USAGE ON SCHEMA public TO yb_manager_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO yb_manager_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO yb_manager_role;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO yb_manager_role;
+
 -- Seed: system_config ---------------------------------------------------
 
 INSERT INTO system_config (key, value, description) VALUES

@@ -149,15 +149,33 @@ def handle_test_host(conn, job: dict, cfg: dict):
     data = agent_get(ip, port, "/health", api_key or "")
     job_log(conn, job_id, "info", f"Agent responded: {json.dumps(data)}")
 
+    try:
+        res = agent_get(ip, port, "/resources", api_key or "")
+        job_log(conn, job_id, "info", f"Resources: {json.dumps(res)}")
+        cpu_used_pct = res.get("cpu_pct")
+        ram_used_gb = res.get("ram_used_gb")
+        disks = res.get("disks", [])
+        disk_gb = sum(d.get("total_gb", 0) for d in disks) if disks else None
+        disk_used_gb = sum(d.get("used_gb", 0) for d in disks) if disks else None
+    except Exception as exc:
+        job_log(conn, job_id, "warn", f"Could not fetch resources: {exc}")
+        cpu_used_pct = None
+        ram_used_gb = None
+        disk_gb = None
+        disk_used_gb = None
+
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE physical_hosts
                SET status = 'online', last_seen = now(),
                    os_version = %s, hyperv_version = %s,
-                   cpu_cores = %s, ram_gb = %s, vm_count = %s
+                   cpu_cores = %s, ram_gb = %s, vm_count = %s,
+                   cpu_used_pct = %s, ram_used_gb = %s,
+                   disk_gb = %s, disk_used_gb = %s
              WHERE id = %s""",
             (data.get("os_version"), data.get("hyperv_version"),
              data.get("cpu_cores"), data.get("ram_gb"), data.get("vm_count"),
+             cpu_used_pct, ram_used_gb, disk_gb, disk_used_gb,
              job["physical_host_id"]),
         )
     return {"status": "ok", "agent": data}
