@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, Form, Header, HTTPException, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
@@ -315,6 +315,68 @@ async def attach_iso(name: str, iso: UploadFile = File(...)):
     log.info("Attaching ISO %s to VM %s", iso_path, name)
     run_ps(f"Add-VMDvdDrive -VMName '{name}' -Path '{iso_path}'")
     return {"status": "iso_attached", "path": str(iso_path)}
+
+
+@app.post("/vms/{name}/attach-iso-path")
+async def attach_iso_path(name: str, request: Request):
+    body = await request.json()
+    path = body.get("iso_path", "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="iso_path is required")
+    log.info("Attaching ISO path '%s' to VM %s", path, name)
+    run_ps(
+        f"$existing = Get-VMDvdDrive -VMName '{name}';"
+        f"if ($existing) {{ Set-VMDvdDrive -VMName '{name}' -Path '{path}' }}"
+        f"else {{ Add-VMDvdDrive -VMName '{name}' -Path '{path}' }}"
+    )
+    return {"status": "iso_attached", "path": path}
+
+
+@app.post("/vms/{name}/autoinstall-setup")
+async def autoinstall_setup(
+    name: str,
+    seed_iso: UploadFile = File(...),
+    ubuntu_iso_path: str = Form(...),
+):
+    """
+    Attach Ubuntu installer ISO (DVD slot 1) + autoinstall seed ISO (DVD slot 2),
+    then configure Gen2 boot order: DVD -> HDD.
+    """
+    if not ubuntu_iso_path:
+        raise HTTPException(status_code=400, detail="ubuntu_iso_path form field is required")
+
+    iso_dir = BASE_DIR / "isos"
+    iso_dir.mkdir(exist_ok=True)
+    seed_path = iso_dir / f"{name}-seed.iso"
+
+    content = await seed_iso.read()
+    with open(seed_path, "wb") as fh:
+        fh.write(content)
+    log.info("Saved seed ISO %s (%d bytes)", seed_path, len(content))
+
+    run_ps(f"Get-VMDvdDrive -VMName '{name}' | Remove-VMDvdDrive")
+
+    run_ps(
+        f"Add-VMDvdDrive -VMName '{name}' -ControllerNumber 0 -ControllerLocation 1"
+        f" -Path '{ubuntu_iso_path}'"
+    )
+    run_ps(
+        f"Add-VMDvdDrive -VMName '{name}' -ControllerNumber 0 -ControllerLocation 2"
+        f" -Path '{seed_path}'"
+    )
+
+    run_ps(
+        f"$dvd = Get-VMDvdDrive -VMName '{name}' | Where-Object {{$_.ControllerLocation -eq 1}};"
+        f"$hdd = Get-VMHardDiskDrive -VMName '{name}';"
+        f"Set-VMFirmware -VMName '{name}' -BootOrder @($dvd, $hdd)"
+    )
+
+    log.info("autoinstall-setup complete for VM %s", name)
+    return {
+        "status": "ready",
+        "ubuntu_iso": ubuntu_iso_path,
+        "seed_iso": str(seed_path),
+    }
 
 
 @app.post("/vms/{name}/start")

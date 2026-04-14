@@ -15,10 +15,12 @@ const CONFIG_GROUPS: { group: string; keys: string[] }[] = [
     ],
   },
   {
-    group: 'Cloud-Init / OS Provisioning',
+    group: 'Ubuntu Autoinstall',
     keys: [
+      'ubuntu_iso_path',
       'default_ssh_user',
       'default_ssh_public_key',
+      'default_user_password_hash',
       'dns_server',
       'ntp_server',
     ],
@@ -41,7 +43,11 @@ const CONFIG_GROUPS: { group: string; keys: string[] }[] = [
   },
 ];
 
-const SENSITIVE_KEYS = new Set(['default_ssh_public_key', 'ansible_ssh_private_key_path']);
+const SENSITIVE_KEYS = new Set([
+  'default_ssh_public_key',
+  'ansible_ssh_private_key_path',
+  'default_user_password_hash',
+]);
 
 function ConfigRow({ config, onSave }: { config: SystemConfig; onSave: (key: string, value: string) => Promise<void> }) {
   const [editing, setEditing] = useState(false);

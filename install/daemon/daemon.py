@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -228,6 +229,52 @@ def handle_create_vm(conn, job: dict, cfg: dict):
     return result
 
 
+def _build_autoinstall_user_data(vm_name: str, user: str, ssh_key: str,
+                                  password_hash: str, ntp: str) -> str:
+    ssh_key_entry = f"      - {ssh_key}" if ssh_key.strip() else ""
+    return f"""#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  network:
+    version: 2
+    ethernets:
+      eth0:
+        dhcp4: true
+        dhcp-identifier: mac
+  storage:
+    layout:
+      name: lvm
+  identity:
+    hostname: {vm_name}
+    username: {user}
+    password: "{password_hash}"
+  ssh:
+    install-server: true
+    allow-pw: true
+    authorized-keys:
+{ssh_key_entry}
+  packages:
+    - openssh-server
+    - python3
+    - python3-pip
+    - curl
+    - wget
+    - net-tools
+  late-commands:
+    - echo '{user} ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/{user}
+    - chmod 440 /target/etc/sudoers.d/{user}
+    - curtin in-target --target=/target -- systemctl enable ssh
+  user-data:
+    timezone: Asia/Ho_Chi_Minh
+    ntp:
+      enabled: true
+      servers: [{ntp}]
+"""
+
+
 def handle_provision_os(conn, job: dict, cfg: dict):
     job_id = job["id"]
     payload = job["payload"]
@@ -241,26 +288,22 @@ def handle_provision_os(conn, job: dict, cfg: dict):
         raise RuntimeError("Host not found")
     ip, port, api_key = row
 
-    job_log(conn, job_id, "info", "Generating cloud-init seed ISO")
-    ssh_key = cfg.get("default_ssh_public_key", "")
-    user = cfg.get("default_ssh_user", "ubuntu")
-    dns = cfg.get("dns_server", "8.8.8.8")
+    iso_path = (payload.get("iso_path") or cfg.get("ubuntu_iso_path", "")).strip()
+    if not iso_path:
+        raise RuntimeError(
+            "iso_path required: set in job payload or system_config key 'ubuntu_iso_path'"
+        )
 
-    user_data = f"""#cloud-config
-hostname: {vm_name}
-manage_etc_hosts: true
-users:
-  - name: {user}
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    ssh_authorized_keys:
-      - {ssh_key}
-package_update: true
-packages: [openssh-server, python3, qemu-guest-agent]
-runcmd:
-  - systemctl enable qemu-guest-agent
-  - systemctl start qemu-guest-agent
-"""
+    ssh_key = cfg.get("default_ssh_public_key", "").strip()
+    user = cfg.get("default_ssh_user", "ubuntu")
+    ntp = cfg.get("ntp_server", "pool.ntp.org")
+    password_hash = cfg.get(
+        "default_user_password_hash",
+        "$6$rounds=4096$saltsalt$4JhFdJHc.M8pkVsG3P0gFJN2xMuNFl3XFjGqRzmKk4p9WIYcPKGmcxPBDJRmJkk1g0KMHD2lMmjsZmRX7sQA/",
+    )
+
+    job_log(conn, job_id, "info", "Generating Ubuntu autoinstall seed ISO")
+    user_data = _build_autoinstall_user_data(vm_name, user, ssh_key, password_hash, ntp)
     meta_data = f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n"
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -272,31 +315,46 @@ runcmd:
         with open(md_file, "w") as f:
             f.write(meta_data)
 
-        result = subprocess.run(
-            ["genisoimage", "-output", iso_file, "-volid", "cidata",
-             "-joliet", "-rock", ud_file, md_file],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"genisoimage failed: {result.stderr}")
+        iso_tool = None
+        for tool in ("xorriso", "genisoimage", "mkisofs"):
+            if shutil.which(tool):
+                iso_tool = tool
+                break
+        if not iso_tool:
+            raise RuntimeError("No ISO tool found on management host (install xorriso or genisoimage)")
 
-        job_log(conn, job_id, "info", "Uploading seed ISO to agent")
+        if iso_tool == "xorriso":
+            cmd = ["xorriso", "-as", "mkisofs", "-output", iso_file,
+                   "-volid", "CIDATA", "-joliet", "-rock", ud_file, md_file]
+        else:
+            cmd = [iso_tool, "-output", iso_file, "-volid", "CIDATA",
+                   "-joliet", "-rock", ud_file, md_file]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"{iso_tool} failed: {result.stderr}")
+
+        job_log(conn, job_id, "info",
+                f"Uploading seed ISO + attaching Ubuntu ISO '{iso_path}' to VM")
         with open(iso_file, "rb") as f:
             resp = requests.post(
-                agent_url(ip, port, f"/vms/{vm_name}/attach-iso"),
+                agent_url(ip, port, f"/vms/{vm_name}/autoinstall-setup"),
                 headers={"X-API-Key": api_key or ""},
-                files={"iso": (f"{vm_name}-seed.iso", f, "application/octet-stream")},
+                files={"seed_iso": (f"{vm_name}-seed.iso", f, "application/octet-stream")},
+                data={"ubuntu_iso_path": iso_path},
                 timeout=120,
             )
             resp.raise_for_status()
+            setup_result = resp.json()
+            job_log(conn, job_id, "info", f"Setup result: {json.dumps(setup_result)}")
 
-    job_log(conn, job_id, "info", "Starting VM for OS installation")
+    job_log(conn, job_id, "info", "Starting VM for automated Ubuntu installation")
     agent_post(ip, port, f"/vms/{vm_name}/start", api_key or "")
 
     with conn.cursor() as cur:
         cur.execute("UPDATE vms SET status = 'starting' WHERE physical_host_id = %s AND name = %s",
                     (job["physical_host_id"], vm_name))
-    return {"status": "provisioning_started"}
+    return {"status": "autoinstall_started", "iso_path": iso_path}
 
 
 def handle_install_yb(conn, job: dict, cfg: dict):
