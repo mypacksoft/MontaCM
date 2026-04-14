@@ -1,4 +1,4 @@
-import { get, post, patch } from './api';
+import { supabase } from './supabase';
 import type {
   PhysicalHost,
   VM,
@@ -9,79 +9,134 @@ import type {
   SystemConfig,
 } from '../types';
 
+async function throwOnError<T>(promise: { data: T | null; error: unknown }): Promise<T> {
+  const { data, error } = await promise;
+  if (error) throw error;
+  return data as T;
+}
+
 export const hostsApi = {
-  list: () => get<PhysicalHost[]>('/physical_hosts', { order: 'name.asc' }),
-  get: (id: string) => get<PhysicalHost[]>(`/physical_hosts`, { id: `eq.${id}` }).then(r => r[0]),
-  create: (data: Partial<PhysicalHost>) => post<PhysicalHost[]>('/physical_hosts', data).then(r => r[0]),
-  update: (id: string, data: Partial<PhysicalHost>) =>
-    patch<PhysicalHost[]>('/physical_hosts', data, { id: `eq.${id}` }).then(r => r[0]),
+  list: () =>
+    throwOnError(supabase.from('physical_hosts').select('*').order('name')),
+
+  get: (id: string) =>
+    throwOnError(supabase.from('physical_hosts').select('*').eq('id', id).maybeSingle()),
+
+  create: (data: Partial<PhysicalHost> & { api_key?: string }) =>
+    throwOnError(
+      supabase.from('physical_hosts').insert(data).select().single()
+    ) as Promise<PhysicalHost>,
+
+  update: (id: string, data: Partial<PhysicalHost> & { api_key?: string }) =>
+    throwOnError(
+      supabase.from('physical_hosts').update(data).eq('id', id).select().single()
+    ) as Promise<PhysicalHost>,
+
   testConnection: (hostId: string) =>
-    post<AutomationJob[]>('/automation_jobs', {
-      type: 'test_host',
-      status: 'queued',
-      physical_host_id: hostId,
-      payload: {},
-      triggered_by: 'user',
-    }).then(r => r[0]),
+    throwOnError(
+      supabase.from('automation_jobs').insert({
+        type: 'test_host',
+        status: 'queued',
+        physical_host_id: hostId,
+        payload: {},
+        triggered_by: 'user',
+      }).select().single()
+    ) as Promise<AutomationJob>,
 };
 
 export const vmsApi = {
-  list: (filters?: Record<string, string>) =>
-    get<VM[]>('/vms', { order: 'name.asc', ...filters }),
-  get: (id: string) => get<VM[]>('/vms', { id: `eq.${id}` }).then(r => r[0]),
-  create: (data: Partial<VM>) => post<VM[]>('/vms', data).then(r => r[0]),
+  list: (filters?: Record<string, string>) => {
+    let q = supabase.from('vms').select('*').order('name');
+    if (filters) {
+      Object.entries(filters).forEach(([k, v]) => {
+        const match = v.match(/^eq\.(.+)$/);
+        if (match) q = q.eq(k, match[1]) as typeof q;
+      });
+    }
+    return throwOnError(q) as Promise<VM[]>;
+  },
+
+  get: (id: string) =>
+    throwOnError(supabase.from('vms').select('*').eq('id', id).maybeSingle()) as Promise<VM>,
+
+  create: (data: Partial<VM>) =>
+    throwOnError(supabase.from('vms').insert(data).select().single()) as Promise<VM>,
+
   update: (id: string, data: Partial<VM>) =>
-    patch<VM[]>('/vms', data, { id: `eq.${id}` }).then(r => r[0]),
+    throwOnError(supabase.from('vms').update(data).eq('id', id).select().single()) as Promise<VM>,
+
   requestCreate: (hostId: string, vmConfig: Record<string, unknown>) =>
-    post<AutomationJob[]>('/automation_jobs', {
-      type: 'create_vm',
-      status: 'queued',
-      physical_host_id: hostId,
-      payload: vmConfig,
-      triggered_by: 'user',
-    }).then(r => r[0]),
+    throwOnError(
+      supabase.from('automation_jobs').insert({
+        type: 'create_vm',
+        status: 'queued',
+        physical_host_id: hostId,
+        payload: vmConfig,
+        triggered_by: 'user',
+      }).select().single()
+    ) as Promise<AutomationJob>,
+
   requestAction: (vmId: string, action: 'start_vm' | 'stop_vm' | 'delete_vm') =>
-    post<AutomationJob[]>('/automation_jobs', {
-      type: action,
-      status: 'queued',
-      vm_id: vmId,
-      payload: {},
-      triggered_by: 'user',
-    }).then(r => r[0]),
+    throwOnError(
+      supabase.from('automation_jobs').insert({
+        type: action,
+        status: 'queued',
+        vm_id: vmId,
+        payload: {},
+        triggered_by: 'user',
+      }).select().single()
+    ) as Promise<AutomationJob>,
 };
 
 export const clustersApi = {
-  list: () => get<YugabyteCluster[]>('/yugabyte_clusters', { order: 'name.asc' }),
-  get: (id: string) => get<YugabyteCluster[]>('/yugabyte_clusters', { id: `eq.${id}` }).then(r => r[0]),
+  list: () =>
+    throwOnError(supabase.from('yugabyte_clusters').select('*').order('name')) as Promise<YugabyteCluster[]>,
+
+  get: (id: string) =>
+    throwOnError(supabase.from('yugabyte_clusters').select('*').eq('id', id).maybeSingle()) as Promise<YugabyteCluster>,
+
   create: (data: Partial<YugabyteCluster>) =>
-    post<YugabyteCluster[]>('/yugabyte_clusters', data).then(r => r[0]),
+    throwOnError(supabase.from('yugabyte_clusters').insert(data).select().single()) as Promise<YugabyteCluster>,
+
   nodes: (clusterId: string) =>
-    get<YugabyteNode[]>('/yugabyte_nodes', { cluster_id: `eq.${clusterId}`, order: 'created_at.asc' }),
+    throwOnError(supabase.from('yugabyte_nodes').select('*').eq('cluster_id', clusterId).order('created_at')) as Promise<YugabyteNode[]>,
+
   addNode: (clusterId: string, vmId: string, role: string) =>
-    post<AutomationJob[]>('/automation_jobs', {
-      type: 'join_cluster',
-      status: 'queued',
-      cluster_id: clusterId,
-      vm_id: vmId,
-      payload: { role },
-      triggered_by: 'user',
-    }).then(r => r[0]),
+    throwOnError(
+      supabase.from('automation_jobs').insert({
+        type: 'join_cluster',
+        status: 'queued',
+        cluster_id: clusterId,
+        vm_id: vmId,
+        payload: { role },
+        triggered_by: 'user',
+      }).select().single()
+    ) as Promise<AutomationJob>,
 };
 
 export const jobsApi = {
-  list: (filters?: Record<string, string>) =>
-    get<AutomationJob[]>('/automation_jobs', {
-      order: 'created_at.desc',
-      limit: '100',
-      ...filters,
-    }),
-  get: (id: string) => get<AutomationJob[]>('/automation_jobs', { id: `eq.${id}` }).then(r => r[0]),
+  list: (filters?: Record<string, string>) => {
+    let q = supabase.from('automation_jobs').select('*').order('created_at', { ascending: false }).limit(100);
+    if (filters) {
+      Object.entries(filters).forEach(([k, v]) => {
+        const match = v.match(/^eq\.(.+)$/);
+        if (match) q = q.eq(k, match[1]) as typeof q;
+      });
+    }
+    return throwOnError(q) as Promise<AutomationJob[]>;
+  },
+
+  get: (id: string) =>
+    throwOnError(supabase.from('automation_jobs').select('*').eq('id', id).maybeSingle()) as Promise<AutomationJob>,
+
   logs: (jobId: string) =>
-    get<JobLog[]>('/job_logs', { job_id: `eq.${jobId}`, order: 'created_at.asc' }),
+    throwOnError(supabase.from('job_logs').select('*').eq('job_id', jobId).order('created_at')) as Promise<JobLog[]>,
 };
 
 export const configApi = {
-  list: () => get<SystemConfig[]>('/system_config', { order: 'key.asc' }),
+  list: () =>
+    throwOnError(supabase.from('system_config').select('*').order('key')) as Promise<SystemConfig[]>,
+
   update: (key: string, value: string) =>
-    patch<SystemConfig[]>('/system_config', { value }, { key: `eq.${key}` }).then(r => r[0]),
+    throwOnError(supabase.from('system_config').update({ value }).eq('key', key).select().single()) as Promise<SystemConfig>,
 };

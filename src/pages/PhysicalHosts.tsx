@@ -28,6 +28,7 @@ function AddHostModal({ onClose, onSave }: { onClose: () => void; onSave: () => 
         name: form.name,
         ip_address: form.ip_address,
         agent_port: parseInt(form.agent_port),
+        api_key: form.api_key || undefined,
         status: 'unknown',
       });
       onSave();

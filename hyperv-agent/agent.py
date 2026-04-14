@@ -43,16 +43,26 @@ ALLOWED_IPS_RAW = cfg.get("security", "allowed_ips", fallback="")
 ALLOWED_IPS = set(ip.strip() for ip in ALLOWED_IPS_RAW.split(",") if ip.strip())
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging — ensure directory exists before creating handler
 # ---------------------------------------------------------------------------
+
+log_path = Path(LOG_FILE)
+try:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+except Exception:
+    log_path = BASE_DIR / "agent.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
 log = logging.getLogger("yb-agent")
 log.setLevel(logging.INFO)
-handler = logging.handlers.RotatingFileHandler(
-    LOG_FILE, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT
-)
-handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-log.addHandler(handler)
+try:
+    file_handler = logging.handlers.RotatingFileHandler(
+        str(log_path), maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT
+    )
+    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    log.addHandler(file_handler)
+except Exception as e:
+    sys.stderr.write(f"WARNING: Could not open log file {log_path}: {e}\n")
 log.addHandler(logging.StreamHandler(sys.stdout))
 
 # ---------------------------------------------------------------------------
@@ -67,16 +77,20 @@ app = FastAPI(title="YB Hyper-V Agent", version="1.0.0", docs_url=None, redoc_ur
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    if request.url.path == "/health" and request.method == "GET":
-        pass
-    else:
+    path = request.url.path
+    method = request.method
+
+    is_health = path == "/health" and method == "GET"
+
+    if not is_health:
         key = request.headers.get("X-API-Key", "")
         if key != API_KEY:
             return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
-    if ALLOWED_IPS:
+    if ALLOWED_IPS and not is_health:
         client_ip = request.client.host if request.client else ""
         if client_ip not in ALLOWED_IPS:
+            log.warning("Blocked request from %s — not in allowed_ips", client_ip)
             return JSONResponse(status_code=403, content={"error": "Forbidden"})
 
     return await call_next(request)
@@ -233,28 +247,6 @@ def list_vms():
     ]
 
 
-@app.get("/vms/{name}")
-def get_vm(name: str):
-    data = ps_json(
-        f"Get-VM -Name '{name}' | Select Name,State,ProcessorCount,"
-        "@{n='MemoryGB';e={[math]::Round($_.MemoryAssigned/1GB,2)}},"
-        "@{n='Uptime';e={{$_.Uptime.TotalSeconds}}}"
-    )
-    if not data:
-        raise HTTPException(status_code=404, detail="VM not found")
-    try:
-        ip_data = ps_json(f"(Get-VMNetworkAdapter -VMName '{name}').IPAddresses")
-        ips = ip_data if isinstance(ip_data, list) else ([ip_data] if ip_data else [])
-    except Exception:
-        ips = []
-
-    state_map = {2: "running", 3: "stopped", 6: "paused", 9: "paused", 0: "unknown"}
-    result = dict(data) if isinstance(data, dict) else {}
-    result["state"] = state_map.get(result.get("State"), "unknown")
-    result["ip_addresses"] = ips
-    return result
-
-
 @app.post("/vms/create")
 async def create_vm(request: Request):
     body = await request.json()
@@ -288,6 +280,28 @@ async def create_vm(request: Request):
     return {"name": name, "vhdx_path": vhdx_path, "status": "created"}
 
 
+@app.get("/vms/{name}")
+def get_vm(name: str):
+    data = ps_json(
+        f"Get-VM -Name '{name}' | Select Name,State,ProcessorCount,"
+        "@{n='MemoryGB';e={[math]::Round($_.MemoryAssigned/1GB,2)}},"
+        "@{n='Uptime';e={{$_.Uptime.TotalSeconds}}}"
+    )
+    if not data:
+        raise HTTPException(status_code=404, detail="VM not found")
+    try:
+        ip_data = ps_json(f"(Get-VMNetworkAdapter -VMName '{name}').IPAddresses")
+        ips = ip_data if isinstance(ip_data, list) else ([ip_data] if ip_data else [])
+    except Exception:
+        ips = []
+
+    state_map = {2: "running", 3: "stopped", 6: "paused", 9: "paused", 0: "unknown"}
+    result = dict(data) if isinstance(data, dict) else {}
+    result["state"] = state_map.get(result.get("State"), "unknown")
+    result["ip_addresses"] = ips
+    return result
+
+
 @app.post("/vms/{name}/attach-iso")
 async def attach_iso(name: str, iso: UploadFile = File(...)):
     iso_dir = BASE_DIR / "isos"
@@ -300,13 +314,6 @@ async def attach_iso(name: str, iso: UploadFile = File(...)):
 
     log.info("Attaching ISO %s to VM %s", iso_path, name)
     run_ps(f"Add-VMDvdDrive -VMName '{name}' -Path '{iso_path}'")
-
-    if False:
-        run_ps(
-            f"$dvd = Get-VMDvdDrive -VMName '{name}'; "
-            f"Set-VMFirmware -VMName '{name}' "
-            f"-BootOrder $dvd,(Get-VMHardDiskDrive -VMName '{name}')"
-        )
     return {"status": "iso_attached", "path": str(iso_path)}
 
 
