@@ -272,8 +272,9 @@ sig_b64 = base64.b64encode(sig).decode().rstrip('=').replace('+','-').replace('/
 print(f'{header}.{payload}.{sig_b64}')
 ")
 
+SERVER_IP=$(hostname -I | awk '{print $1}')
 cat > "$APP_ENV_FILE" <<EOF
-VITE_API_URL=
+VITE_API_URL=http://${SERVER_IP}:3000
 EOF
 
 cd "$WEB_SRC_DIR"
