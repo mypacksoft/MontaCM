@@ -1,0 +1,15 @@
+[Unit]
+Description=YugabyteDB Master
+After=network.target
+
+[Service]
+User={{ yb_user }}
+Group={{ yb_group }}
+ExecStart={{ yb_install_dir }}/bin/yb-master --flagfile={{ yb_install_dir }}/conf/yb-master.conf
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+LimitNPROC=65536
+
+[Install]
+WantedBy=multi-user.target

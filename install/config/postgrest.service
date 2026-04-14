@@ -1,0 +1,16 @@
+[Unit]
+Description=PostgREST API Server
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+ExecStart=/usr/local/bin/postgrest /etc/postgrest.conf
+Restart=on-failure
+RestartSec=5
+Environment=PGRST_LOG_LEVEL=warn
+
+[Install]
+WantedBy=multi-user.target

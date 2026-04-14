@@ -1,0 +1,19 @@
+[Unit]
+Description=YB Manager Automation Daemon
+After=postgresql.service network.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=yb-manager
+Group=yb-manager
+WorkingDirectory=/opt/yb-manager/daemon
+ExecStart=/opt/yb-manager/daemon/venv/bin/python /opt/yb-manager/daemon/daemon.py
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/opt/yb-manager/daemon/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

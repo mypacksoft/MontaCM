@@ -1,0 +1,15 @@
+[Unit]
+Description=YugabyteDB TServer
+After=network.target yb-master.service
+
+[Service]
+User={{ yb_user }}
+Group={{ yb_group }}
+ExecStart={{ yb_install_dir }}/bin/yb-tserver --flagfile={{ yb_install_dir }}/conf/yb-tserver.conf
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+LimitNPROC=65536
+
+[Install]
+WantedBy=multi-user.target

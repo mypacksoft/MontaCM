@@ -1,0 +1,182 @@
+---
+- name: Install YugabyteDB on a VM
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    yb_version: "2.20.1.0"
+    yb_download_url: ""
+    yb_install_dir: "/opt/yugabyte"
+    yb_data_dir: "/data/yugabyte"
+    yb_user: "yugabyte"
+    yb_group: "yugabyte"
+    yb_master_port: 7100
+    yb_tserver_port: 9100
+    yb_ysql_port: 5433
+    yb_ycql_port: 9042
+    yb_master_web_port: 7000
+    yb_tserver_web_port: 9000
+
+  tasks:
+    - name: Install required packages
+      apt:
+        name:
+          - openjdk-17-jre-headless
+          - curl
+          - wget
+          - python3
+          - net-tools
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    - name: Install required packages (RHEL)
+      yum:
+        name:
+          - java-17-openjdk-headless
+          - curl
+          - wget
+          - python3
+          - net-tools
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Create yugabyte group
+      group:
+        name: "{{ yb_group }}"
+        system: true
+
+    - name: Create yugabyte user
+      user:
+        name: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        system: true
+        create_home: true
+        home: "/home/{{ yb_user }}"
+        shell: /bin/bash
+
+    - name: Create install directory
+      file:
+        path: "{{ yb_install_dir }}"
+        state: directory
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        mode: "0755"
+
+    - name: Create data directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        mode: "0755"
+      loop:
+        - "{{ yb_data_dir }}"
+        - "{{ yb_data_dir }}/master"
+        - "{{ yb_data_dir }}/tserver"
+
+    - name: Check if YugabyteDB already extracted
+      stat:
+        path: "{{ yb_install_dir }}/bin/yb-master"
+      register: yb_binary
+
+    - name: Download YugabyteDB tarball
+      get_url:
+        url: "{{ yb_download_url }}"
+        dest: "/tmp/yugabyte-{{ yb_version }}.tar.gz"
+        mode: "0644"
+        timeout: 300
+      when:
+        - not yb_binary.stat.exists
+        - yb_download_url != ""
+
+    - name: Extract YugabyteDB
+      unarchive:
+        src: "/tmp/yugabyte-{{ yb_version }}.tar.gz"
+        dest: "{{ yb_install_dir }}"
+        remote_src: true
+        extra_opts:
+          - "--strip-components=1"
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+      when:
+        - not yb_binary.stat.exists
+        - yb_download_url != ""
+
+    - name: Set ownership of install dir
+      file:
+        path: "{{ yb_install_dir }}"
+        recurse: true
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+
+    - name: Create yb-master config directory
+      file:
+        path: "{{ yb_install_dir }}/conf"
+        state: directory
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        mode: "0755"
+
+    - name: Write yb-master.conf
+      template:
+        src: ../templates/yb-master.conf.j2
+        dest: "{{ yb_install_dir }}/conf/yb-master.conf"
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        mode: "0644"
+
+    - name: Write yb-tserver.conf
+      template:
+        src: ../templates/yb-tserver.conf.j2
+        dest: "{{ yb_install_dir }}/conf/yb-tserver.conf"
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        mode: "0644"
+
+    - name: Install yb-master systemd service
+      template:
+        src: ../templates/yb-master.service.j2
+        dest: /etc/systemd/system/yb-master.service
+        mode: "0644"
+
+    - name: Install yb-tserver systemd service
+      template:
+        src: ../templates/yb-tserver.service.j2
+        dest: /etc/systemd/system/yb-tserver.service
+        mode: "0644"
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+    - name: Enable and start yb-master
+      systemd:
+        name: yb-master
+        enabled: true
+        state: started
+
+    - name: Enable and start yb-tserver
+      systemd:
+        name: yb-tserver
+        enabled: true
+        state: started
+
+    - name: Wait for yb-master to be ready
+      wait_for:
+        port: "{{ yb_master_web_port }}"
+        host: "{{ ansible_default_ipv4.address }}"
+        delay: 5
+        timeout: 120
+
+    - name: Wait for yb-tserver to be ready
+      wait_for:
+        port: "{{ yb_tserver_web_port }}"
+        host: "{{ ansible_default_ipv4.address }}"
+        delay: 5
+        timeout: 120
+
+    - name: Install complete
+      debug:
+        msg: "YugabyteDB {{ yb_version }} installed and running on {{ ansible_default_ipv4.address }}"

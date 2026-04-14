@@ -1,0 +1,7 @@
+--fs_data_dirs={{ yb_data_dir }}/master
+--master_addresses={{ master_addresses if master_addresses != "" else ansible_default_ipv4.address + ":" + yb_master_port|string }}
+--rpc_bind_addresses={{ ansible_default_ipv4.address }}:{{ yb_master_port }}
+--webserver_interface={{ ansible_default_ipv4.address }}
+--webserver_port={{ yb_master_web_port }}
+--replication_factor=3
+--logtostderr

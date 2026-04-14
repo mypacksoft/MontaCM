@@ -1,0 +1,8 @@
+--fs_data_dirs={{ yb_data_dir }}/tserver
+--tserver_master_addrs={{ master_addresses if master_addresses != "" else ansible_default_ipv4.address + ":" + yb_master_port|string }}
+--rpc_bind_addresses={{ ansible_default_ipv4.address }}:{{ yb_tserver_port }}
+--webserver_interface={{ ansible_default_ipv4.address }}
+--webserver_port={{ yb_tserver_web_port }}
+--pgsql_proxy_bind_address={{ ansible_default_ipv4.address }}:{{ yb_ysql_port }}
+--cql_proxy_bind_address={{ ansible_default_ipv4.address }}:{{ yb_ycql_port }}
+--logtostderr

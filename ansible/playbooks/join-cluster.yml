@@ -1,0 +1,90 @@
+---
+- name: Join YugabyteDB node to an existing cluster
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    master_addresses: ""
+    node_role: "master+tserver"
+    cluster_id: ""
+    yb_install_dir: "/opt/yugabyte"
+    yb_data_dir: "/data/yugabyte"
+    yb_user: "yugabyte"
+    yb_group: "yugabyte"
+    yb_master_port: 7100
+    yb_tserver_port: 9100
+    yb_ysql_port: 5433
+    yb_ycql_port: 9042
+    yb_master_web_port: 7000
+    yb_tserver_web_port: 9000
+
+  tasks:
+    - name: Verify YugabyteDB is installed
+      stat:
+        path: "{{ yb_install_dir }}/bin/yb-master"
+      register: yb_binary
+      failed_when: not yb_binary.stat.exists
+
+    - name: Update yb-master.conf with cluster master addresses
+      template:
+        src: ../templates/yb-master.conf.j2
+        dest: "{{ yb_install_dir }}/conf/yb-master.conf"
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        mode: "0644"
+
+    - name: Update yb-tserver.conf with cluster master addresses
+      template:
+        src: ../templates/yb-tserver.conf.j2
+        dest: "{{ yb_install_dir }}/conf/yb-tserver.conf"
+        owner: "{{ yb_user }}"
+        group: "{{ yb_group }}"
+        mode: "0644"
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+    - name: Restart yb-master if role includes master
+      systemd:
+        name: yb-master
+        state: restarted
+        enabled: true
+      when: node_role in ['master', 'master+tserver']
+
+    - name: Restart yb-tserver if role includes tserver
+      systemd:
+        name: yb-tserver
+        state: restarted
+        enabled: true
+      when: node_role in ['tserver', 'master+tserver']
+
+    - name: Wait for master port
+      wait_for:
+        port: "{{ yb_master_web_port }}"
+        host: "{{ ansible_default_ipv4.address }}"
+        delay: 5
+        timeout: 120
+      when: node_role in ['master', 'master+tserver']
+
+    - name: Wait for tserver port
+      wait_for:
+        port: "{{ yb_tserver_web_port }}"
+        host: "{{ ansible_default_ipv4.address }}"
+        delay: 5
+        timeout: 120
+      when: node_role in ['tserver', 'master+tserver']
+
+    - name: Add tserver to cluster via yb-admin (run on first master)
+      command: >
+        {{ yb_install_dir }}/bin/yb-admin
+        --master_addresses {{ master_addresses }}
+        list_all_tablet_servers
+      register: tablet_check
+      ignore_errors: true
+      when: node_role in ['tserver', 'master+tserver']
+
+    - name: Node join complete
+      debug:
+        msg: "Node {{ ansible_default_ipv4.address }} joined cluster with role {{ node_role }}, masters: {{ master_addresses }}"
