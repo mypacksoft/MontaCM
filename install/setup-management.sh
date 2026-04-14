@@ -261,20 +261,8 @@ step "Building React web app"
 WEB_SRC_DIR="$REPO_DIR"
 APP_ENV_FILE="$WEB_SRC_DIR/.env.production"
 
-ANON_JWT=$(python3 -c "
-import base64, hmac, hashlib, json, time
-header = base64.b64encode(json.dumps({'alg':'HS256','typ':'JWT'}).encode()).decode().rstrip('=')
-payload = base64.b64encode(json.dumps({'role':'anon','iat':int(time.time())}).encode()).decode().rstrip('=')
-sig_input = f'{header}.{payload}'.encode()
-key = '${JWT_SECRET}'.encode()
-sig = hmac.new(key, sig_input, hashlib.sha256).digest()
-sig_b64 = base64.b64encode(sig).decode().rstrip('=').replace('+','-').replace('/','_')
-print(f'{header}.{payload}.{sig_b64}')
-")
-
-SERVER_IP=$(hostname -I | awk '{print $1}')
 cat > "$APP_ENV_FILE" <<EOF
-VITE_API_URL=http://${SERVER_IP}:3000
+VITE_API_URL=/api
 EOF
 
 cd "$WEB_SRC_DIR"

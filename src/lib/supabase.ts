@@ -1,4 +1,4 @@
-const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
+const API_URL = ((import.meta.env.VITE_API_URL as string) || '/api').replace(/\/$/, '');
 
 export type OrderDir = 'asc' | 'desc';
 
